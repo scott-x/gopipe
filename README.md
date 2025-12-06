@@ -1,4 +1,4 @@
-Translate to: [简体中文](README_zh.md)
+Translate to: [简体中文](README-zh.md)
 
 ### gopipe: A Generic Go Concurrency Pipeline Utility 🚀
 
