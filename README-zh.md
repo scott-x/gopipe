@@ -21,7 +21,7 @@
 ### 📦 安装
 
 ```bash
-go get [github.com/scott-x/gopipe](https://github.com/scott-x/gopipe)
+go get github.com/scott-x/gopipe
 ````
 
 -----
@@ -40,7 +40,7 @@ package main
 import (
     "fmt"
     "time"
-    "[github.com/scott-x/gopipe](https://github.com/scott-x/gopipe)"
+    "github.com/scott-x/gopipe"
 )
 
 // 任务结构体定义

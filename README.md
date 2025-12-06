@@ -19,7 +19,7 @@ Translate to: [简体中文](README-zh.md)
 ### 📦 Installation
 
 ```bash
-go get [github.com/scott-x/gopipe](https://github.com/scott-x/gopipe)
+go get github.com/scott-x/gopipe
 ````
 
 -----
