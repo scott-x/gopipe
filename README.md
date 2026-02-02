@@ -9,9 +9,10 @@ Translate to: [简体中文](README-zh.md)
 ### ✨ Features
 
 * **Configurable Concurrency:** Set a precise number of `Workers` for each stage (e.g., Stage A: 3 workers, Stage B: 4 workers).
-* **Decoupled Stages:** Stages communicate asynchronously via **buffered Go Channels**, minimizing blocking.
-* **Generic Task Handling:** Uses the **`Task` interface** for maximum flexibility—any struct can be a task.
+* **Type Safety with Generics:** Leverage Go Generics for type-safe task processing—no more interface casting or type assertions.
+* **Context Support:** Fully supports `context.Context` for easy cancellation and timeout management.
 * **Automatic Cleanup:** Manages `sync.WaitGroup` and cascading Channel closing for **graceful shutdown**.
+* **Panic Recovery:** Automatically recovers from worker panics to prevent pipeline deadlocks.
 * **Chainable API:** Uses a **Builder pattern** (`AddStage().AddStage()`) for intuitive pipeline definition.
 
 ---
@@ -30,12 +31,13 @@ This example demonstrates a three-stage pipeline (A, B, C) with concurrency limi
 
 #### 1\. Define Task and Stage Functions
 
-Your task structure must implement the `gopipe.Task` interface. We will also define `processB` and `processC` to complete the pipeline logic.
+Define your task structure and processing functions. No interface implementation is required.
 
 ```go
 package main
 
 import (
+    "context"
     "fmt"
     "time"
     "github.com/scott-x/gopipe"
@@ -48,49 +50,39 @@ type MyTask struct {
     DataB string // Result from Stage B
 }
 
-func (t MyTask) GetID() int {
-    return t.ID
-}
-
 // Stage A: Concurrency 3
-func processA(task gopipe.Task) (gopipe.Task, error) {
-    myTask := task.(MyTask) 
-    fmt.Printf("A Worker: Processing task %d\n", myTask.ID)
+func processA(task MyTask) (MyTask, error) {
+    fmt.Printf("A Worker: Processing task %d\n", task.ID)
     time.Sleep(time.Millisecond * 100)
-    myTask.DataA = fmt.Sprintf("Task %d processed by A", myTask.ID)
-    return myTask, nil
+    task.DataA = fmt.Sprintf("Task %d processed by A", task.ID)
+    return task, nil
 }
 
 // Stage B: Concurrency 4 (Consumes A's output)
-func processB(task gopipe.Task) (gopipe.Task, error) {
-    myTask := task.(MyTask) 
-    fmt.Printf("B Worker: Processing task %d (DataA: %s)\n", myTask.ID, myTask.DataA)
+func processB(task MyTask) (MyTask, error) {
+    fmt.Printf("B Worker: Processing task %d (DataA: %s)\n", task.ID, task.DataA)
     time.Sleep(time.Millisecond * 150)
-    myTask.DataB = fmt.Sprintf("Task %d processed by B", myTask.ID)
-    return myTask, nil
+    task.DataB = fmt.Sprintf("Task %d processed by B", task.ID)
+    return task, nil
 }
 
 // Stage C: Concurrency 5 (Final stage, consumes B's output)
-func processC(task gopipe.Task) (gopipe.Task, error) {
-    myTask := task.(MyTask) 
-    fmt.Printf("C Worker: Finalizing task %d (DataB: %s)\n", myTask.ID, myTask.DataB)
+func processC(task MyTask) (MyTask, error) {
+    fmt.Printf("C Worker: Finalizing task %d (DataB: %s)\n", task.ID, task.DataB)
     time.Sleep(time.Millisecond * 50)
-    // Return nil to indicate the task should not be passed further, 
-    // or return myTask if you want it sent to the output channel.
-    return myTask, nil
+    return task, nil
 }
 ```
 
 #### 2\. Build and Run the Pipeline
 
-We will use the `outputCh` in a separate Goroutine to demonstrate consumption and avoid the "declared but not used" error.
-
 ```go
 func main() {
     const totalTasks = 20
+    ctx := context.Background()
     
-    // 1. Create Pipeline with buffer size
-    pipe := gopipe.NewPipeline(totalTasks)
+    // 1. Create Pipeline with generic type and buffer size
+    pipe := gopipe.NewPipeline[MyTask](totalTasks)
 
     // 2. Add Stages (A: 3 workers, B: 4 workers, C: 5 workers)
     pipe.AddStage("StageA", 3, processA).
@@ -98,17 +90,17 @@ func main() {
         AddStage("StageC", 5, processC) 
 
     // 3. Run and get input/output channels
-    inputCh, outputCh := pipe.Run()
+    inputCh, outputCh := pipe.Run(ctx)
 
     // 4. Input tasks
     for i := 1; i <= totalTasks; i++ {
         inputCh <- MyTask{ID: i}
     }
 
-    // 5. CRITICAL: Close the input channel to signal the pipeline to start shutting down
+    // 5. Close the input channel to signal shutdown
     close(inputCh)
 
-    // 6. Consume the final output (This resolves the 'outputCh declared and not used' error)
+    // 6. Consume the final output
     go func() {
         completedCount := 0
         for range outputCh {

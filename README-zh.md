@@ -11,9 +11,10 @@
 ### ✨ 特性
 
 * **可配置并发度:** 为每个工序（Stage）设置精确的 `Worker` 数量（例如，工序 A：3 个 Worker，工序 B：4 个 Worker）。
-* **工序解耦:** 各工序通过带缓冲区的 **Go Channel** 进行异步通信，最大程度减少阻塞。
-* **通用任务处理:** 使用 **`Task` 接口**实现，具备最大的灵活性，任何结构体都可以作为任务。
+* **泛型类型安全:** 利用 Go 泛型（Generics）实现类型安全的任务处理，告别接口转换和类型断言。
+* **Context 支持:** 全面支持 `context.Context`，便于实现取消（Cancellation）和超时管理。
 * **自动化清理:** 自动管理 `sync.WaitGroup` 和级联的 Channel 关闭，实现**优雅停机**。
+* **异常恢复:** 自动从 Worker 的 panic 中恢复，防止流水线因异常而死锁。
 * **链式 API:** 使用 **Builder 模式** (`AddStage().AddStage()`)，定义流水线流程直观简洁。
 
 ---
@@ -32,12 +33,13 @@ go get github.com/scott-x/gopipe
 
 #### 1\. 定义任务和工序函数
 
-你的任务结构体必须实现 `gopipe.Task` 接口。我们将定义完整的 `processA`、`processB` 和 `processC` 逻辑。
+定义你的任务结构体和处理函数。无需实现任何接口。
 
 ```go
 package main
 
 import (
+    "context"
     "fmt"
     "time"
     "github.com/scott-x/gopipe"
@@ -50,48 +52,39 @@ type MyTask struct {
     DataB string // B 工序的结果
 }
 
-func (t MyTask) GetID() int {
-    return t.ID
-}
-
 // 工序 A: 并发 3
-func processA(task gopipe.Task) (gopipe.Task, error) {
-    myTask := task.(MyTask) 
-    fmt.Printf("A Worker: 正在处理任务 %d\n", myTask.ID)
+func processA(task MyTask) (MyTask, error) {
+    fmt.Printf("A Worker: 正在处理任务 %d\n", task.ID)
     time.Sleep(time.Millisecond * 100)
-    myTask.DataA = fmt.Sprintf("任务 %d 已被 A 处理", myTask.ID)
-    return myTask, nil
+    task.DataA = fmt.Sprintf("任务 %d 已被 A 处理", task.ID)
+    return task, nil
 }
 
 // 工序 B: 并发 4 (消费 A 的输出)
-func processB(task gopipe.Task) (gopipe.Task, error) {
-    myTask := task.(MyTask) 
-    fmt.Printf("B Worker: 正在处理任务 %d (DataA: %s)\n", myTask.ID, myTask.DataA)
+func processB(task MyTask) (MyTask, error) {
+    fmt.Printf("B Worker: 正在处理任务 %d (DataA: %s)\n", task.ID, task.DataA)
     time.Sleep(time.Millisecond * 150)
-    myTask.DataB = fmt.Sprintf("任务 %d 已被 B 处理", myTask.ID)
-    return myTask, nil
+    task.DataB = fmt.Sprintf("任务 %d 已被 B 处理", task.ID)
+    return task, nil
 }
 
 // 工序 C: 并发 5 (最终工序，消费 B 的输出)
-func processC(task gopipe.Task) (gopipe.Task, error) {
-    myTask := task.(MyTask) 
-    fmt.Printf("C Worker: 正在进行最终处理任务 %d (DataB: %s)\n", myTask.ID, myTask.DataB)
+func processC(task MyTask) (MyTask, error) {
+    fmt.Printf("C Worker: 正在进行最终处理任务 %d (DataB: %s)\n", task.ID, task.DataB)
     time.Sleep(time.Millisecond * 50)
-    // 返回 myTask，将其发送到最终的 output channel
-    return myTask, nil
+    return task, nil
 }
 ```
 
 #### 2\. 构建和运行流水线
 
-在 `main` 函数中，我们启动一个 Goroutine 来消费 `outputCh`，避免 "declared but not used" 的编译错误。
-
 ```go
 func main() {
     const totalTasks = 20
+    ctx := context.Background()
     
-    // 1. 创建 Pipeline 实例，设置 Channel 缓冲区大小
-    pipe := gopipe.NewPipeline(totalTasks)
+    // 1. 创建 Pipeline 实例，指定泛型类型和 Channel 缓冲区大小
+    pipe := gopipe.NewPipeline[MyTask](totalTasks)
 
     // 2. 添加工序 (A: 3 worker, B: 4 worker, C: 5 worker)
     pipe.AddStage("StageA", 3, processA).
@@ -99,17 +92,17 @@ func main() {
         AddStage("StageC", 5, processC) 
 
     // 3. 运行并获取输入/输出 Channel
-    inputCh, outputCh := pipe.Run()
+    inputCh, outputCh := pipe.Run(ctx)
 
     // 4. 生产任务
     for i := 1; i <= totalTasks; i++ {
         inputCh <- MyTask{ID: i}
     }
 
-    // 5. 关键步骤: 关闭输入 Channel，以信号通知流水线开始关闭
+    // 5. 关闭输入 Channel，以信号通知流水线开始关闭
     close(inputCh)
 
-    // 6. 消费最终输出 (解决 'outputCh declared and not used' 错误)
+    // 6. 消费最终输出
     go func() {
         completedCount := 0
         for range outputCh {
